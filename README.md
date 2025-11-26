@@ -44,10 +44,10 @@ gcc -fopenmp csb/matrix_CSB.c -o sparse_seq
 ```bash
 ./sparse_seq <matrix_name> <SEQ/PAR> <schedule_type> <thread_count> <chunk_size>
 ```
-- matrix_file: Path to the input matrix in Matrix Market format
-- schedule_type: OpenMP scheduling type (static, dynamic, guided, auto)
-- num_threads: Number of threads to use (e.g., 4, 16, 32, 64)
-- num_chunks: Chunk size for scheduling (0, 1, 10, 50, 100)
+- **matrix_file**: Path to the input matrix in Matrix Market format
+- **schedule_type**: OpenMP scheduling type (static, dynamic, guided, auto)
+- **num_threads**: Number of threads to use (e.g., 4, 16, 32, 64)
+- **num_chunks**: Chunk size for scheduling (0, 1, 10, 50, 100)
 
 ### Benchmark run
 - **CSR format**
@@ -60,7 +60,16 @@ gcc -fopenmp csb/matrix_CSB.c -o sparse_seq
   chmod u+x csb_script.sh #if the user doesn't have permissions
   ./csb_script.sh matrix_CSB.c
   ```
-  
+
+## CSV convert and graph generator
+Instructions to run the python scripts. Firstly, they convert the output of the bash into a .csv file and then they generate graphs based on the information stored inside the charts.
+ ```bash
+  source venv/bin/activate
+  python3 csr_to_CSV.py
+  python3 csb_to_CSV.py
+  python3 merge_report.py
+  python3 generate_graphs.py
+  ```
 
 
 
