@@ -4,6 +4,8 @@
 #include <time.h>
 #include <mpi.h>
 
+#define N_RUNS 100
+
 typedef struct Sparse_CSR{
     size_t n_rows;
     size_t n_cols;
@@ -247,8 +249,6 @@ int main(int argc, char* argv[]){
     MPI_Comm_rank(MPI_COMM_WORLD, &rank); //addressing all processes using MPI_COMM_WORLD, we're giving each process a unique id
     MPI_Comm_size(MPI_COMM_WORLD, &size); //total number of processes
 
-    printf("[Rank %d/%d] Starting program...\n", rank, size);
-
     if (argc < 2){
         if (rank == 0){
             fprintf(stderr, "Usage: %s <matrix_file>\n", argv[0]);
@@ -326,31 +326,79 @@ int main(int argc, char* argv[]){
 
     create_sparse_csr(local_n_rows, n_cols, local_nnz, row_local, col_local, val_local, &local_csr);
     
-    //serialized print
-    MPI_Barrier(MPI_COMM_WORLD); //synchronize all processes
-    for (int r = 0; r < size; r++) {
-        if (rank == r) {
-            printf("\n[Rank %d] Local CSR:\n", rank);
-            print_sparse_csr(&local_csr);
-            fflush(stdout);
-        }
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
+    //serialized print to check the matrix
+    //MPI_Barrier(MPI_COMM_WORLD); //synchronize all processes
+    //for (int r = 0; r < size; r++) {
+    //    if (rank == r) {
+    //        printf("\n[Rank %d] Local CSR:\n", rank);
+    //        print_sparse_csr(&local_csr);
+    //        fflush(stdout);
+    //    }
+    //}
+    //MPI_Barrier(MPI_COMM_WORLD);
 
     //rank 0 creates the random vector, which will be broadcasted to all processes
     double *vec = malloc(n_cols * sizeof(double));
     if (rank == 0){
         random_vector(vec, n_cols);
-        printf("\nInput vector x:\n");
-        for (size_t i = 0; i < n_cols; ++i) {
-            printf("x[%zu] = %.2f\n", i, vec[i]);
-        }   
+        //printf("\nInput vector x:\n");
+        //for (size_t i = 0; i < n_cols; ++i) {
+        //    printf("x[%zu] = %.2f\n", i, vec[i]);
+        //}   
     }
 
     MPI_Bcast(vec, n_cols, MPI_DOUBLE, 0, MPI_COMM_WORLD); //simple, memory heavy approach
 
     double *local_result = calloc(local_n_rows, sizeof(double)); //initialize to zero
-    spmv(&local_csr, vec, local_result, 1); //using parallel version with OpenMP
+
+    spmv(&local_csr, vec, local_result, 0); //warm-up run (warm caches, avoids first-run overheads)
+    double local_times[N_RUNS];
+
+    for (int run = 0; run < N_RUNS; run++) {
+        MPI_Barrier(MPI_COMM_WORLD);
+        double start = MPI_Wtime();
+
+        spmv(&local_csr, vec, local_result, 1); //using parallel version with OpenMP
+
+        MPI_Barrier(MPI_COMM_WORLD);
+        double end = MPI_Wtime();
+
+        local_times[run] = end - start;
+    }
+
+    double max_times[N_RUNS];
+    for (int i=0; i<N_RUNS; i++){
+        MPI_Reduce(&local_times[i], &max_times[i], 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    }
+
+
+    double avg_time = 0.0;
+    if (rank == 0) {
+        double min_time = max_times[0];
+        double max_time = max_times[0];
+
+        for (int i = 0; i < N_RUNS; i++) {
+            avg_time += max_times[i];
+            if (max_times[i] < min_time) min_time = max_times[i];
+            if (max_times[i] > max_time) max_time = max_times[i];
+        }
+
+        avg_time /= N_RUNS;
+
+        printf("\nSpMV Time over %d iterations:\n", N_RUNS);
+        printf("Min: %.6f s\n", min_time);
+        printf("Max: %.6f s\n", max_time);
+        printf("Avg: %.6f s\n", avg_time);
+    }
+
+    //flops + gflops calculation
+    if (rank == 0) {
+        long long flops = 2LL * n_nz;  
+        double gflops = flops / (avg_time * 1e9);
+
+        printf("Total FLOPs per SpMV: %lld\n", flops);
+        printf("Performance: %.3f GFLOP/s\n", gflops);
+    }
 
     //GATHER RESULTS TO RANK 0
     //compute actual number of local rows for each rank based on row_local
@@ -402,15 +450,22 @@ int main(int argc, char* argv[]){
         }
 
         //print result vector
-        printf("\nResult vector y:\n");
-        for (size_t i = 0; i < n_rows; ++i) {
-            printf("y[%zu] = %.2f\n", i, y_global[i]);
-        }
+        //printf("\nResult vector y:\n");
+        //for (size_t i = 0; i < n_rows; ++i) {
+        //    printf("y[%zu] = %.2f\n", i, y_global[i]);
+        //}
 
         free(receiver_counts);
         free(displs);
         free(gathered_results);
         free(y_global);
+    }
+
+    if (rank == 0){
+        free(row_indices);
+        free(col_indices);
+        free(values);
+        free(nnz_rank);
     }
 
     free(row_local);
