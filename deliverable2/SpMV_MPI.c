@@ -2,128 +2,14 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <time.h>
+#include <string.h>
 #include <mpi.h>
+
+#include "config/config.h"
 
 #define N_RUNS 100
 
-typedef struct Sparse_CSR{
-    size_t n_rows;
-    size_t n_cols;
-    size_t n_nz;
 
-    size_t* row_ptrs;
-    size_t* col_indices;
-    double* values;
-} Sparse_CSR;
-
-
-void create_sparse_csr(
-    size_t n_rows,
-    size_t n_cols,
-    size_t n_nz,
-
-    const int *row,
-    const int* col,
-    const double* val,
-    Sparse_CSR* output_csr
-){
-    output_csr->n_rows = n_rows;
-    output_csr->n_cols = n_cols;
-    output_csr->n_nz = n_nz;
-
-    output_csr->row_ptrs = calloc(n_rows + 1, sizeof(size_t)); //calloc-> initializes memory and also fill it with zero, useful for initializing the pointer
-    output_csr->col_indices = calloc(n_nz, sizeof(size_t));
-    output_csr->values = calloc(n_nz, sizeof(double));
-
-    //count non-zero per rows
-    for (size_t i = 0; i < n_nz; ++i) {
-        output_csr->row_ptrs[row[i] + 1]++; //if we don't remap rows -> out of bounds
-    }
-
-    for (size_t i = 0; i<n_rows; ++i){
-        output_csr->row_ptrs[i + 1] += output_csr->row_ptrs[i];
-    }
-
-    //we fill the indeces of the columns and the values
-    size_t *row_offset = calloc(n_rows, sizeof(size_t)); // track current position in each row
-    for (size_t i = 0; i < n_nz; ++i) {
-        int r = row[i];
-        size_t dest = output_csr->row_ptrs[r] + row_offset[r];
-        output_csr->col_indices[dest] = col[i];
-        output_csr->values[dest] = val[i];
-        row_offset[r]++;
-    }
-
-    free(row_offset);
-
-}
-
-
-void print_sparse_csr(Sparse_CSR* sparse_csr){
-    printf("\n");
-    printf("row\tcol\tval\n");
-    printf("---\n");
-    for (size_t i=0; i<sparse_csr->n_rows; ++i){
-        size_t nz_start = sparse_csr->row_ptrs[i];
-        size_t nz_end = sparse_csr->row_ptrs[i+1];
-        
-        for (size_t j = nz_start; j < nz_end; ++j) {
-            size_t col = sparse_csr->col_indices[j];
-            double val = sparse_csr->values[j];
-            printf("%zu\t%zu\t%.2f\n", i, col, val);
-        }
-    }
-}
-
-
-void free_sparse_csr(Sparse_CSR* sparse_csr){
-    free(sparse_csr->row_ptrs);
-    free(sparse_csr-> col_indices);
-    free(sparse_csr-> values);
-}
-
-
-void read_matrix_market_file(
-    const char* filename,
-    int* n_rows,
-    int* n_cols,
-    int* n_nz,
-    int** row_indices,
-    int** col_indices,
-    double** values
-){
-    FILE* f = fopen(filename, "r");
-    if (f == NULL){
-        fprintf(stderr, "Error opening file: %s\n", filename);
-        exit(EXIT_FAILURE);
-    }
-
-    char line[256];
-    do{
-        if(!fgets(line, sizeof(line), f)) {
-            fprintf(stderr, "Unexpected end of file\n");
-            exit(EXIT_FAILURE);
-        }
-    }while (line[0] == '%');
-
-    sscanf(line, "%d %d %d", n_rows, n_cols, n_nz);
-    //allocates memory without overriding
-    *row_indices = malloc((*n_nz) * sizeof(int));
-    *col_indices = malloc((*n_nz) * sizeof(int));
-    *values = malloc((*n_nz) * sizeof(double));
-
-
-    for (size_t i = 0; i < *n_nz; ++i) {
-        int r, c;
-        double v;
-        fscanf(f, "%d %d %lf", &r, &c, &v);
-        (*row_indices)[i] = r - 1; // convert to 0-based index
-        (*col_indices)[i] = c - 1; // convert to 0-based index
-        (*values)[i] = v;
-    }
-
-    fclose(f);
-}
 
 void scatter_entries(    
     int rank,
@@ -179,19 +65,6 @@ void scatter_entries(
         free(col_buf);
         free(val_buf);
         free(displs);
-    }
-}
-
-//creates the randome vector for SpMV
-void random_vector(double* vec, size_t size){
-   static bool seeded = false;
-    if (!seeded) { //sees run one, so that multiple calls for benchmar not reset the seed
-        srand(time(NULL));
-        seeded = true;
-    }
-
-    for(size_t i = 0; i < size; ++i){
-        vec[i] = rand() % 10; 
     }
 }
 
@@ -257,6 +130,9 @@ int main(int argc, char* argv[]){
         return EXIT_FAILURE;
     }
 
+    bool is_2D = false;
+    //is_2D = (strcmp(argv[2], "2D") == 0); //DA RIVEDERE
+
     const char* matrix_file = argv[1];
     int n_rows, n_cols, n_nz;
     int* row_indices = NULL;
@@ -273,6 +149,12 @@ int main(int argc, char* argv[]){
     MPI_Bcast(&n_cols, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&n_nz, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
+    //this is where the logic between 1D and 2D distribution diverges TO DO
+    //if (!is_2D){
+        //1D ROW-WISE DISTRIBUTION
+
+    //}else{}
+
     //compute ownership of rows [cyclic distribution]
     int *nnz_rank = NULL;
 
@@ -287,6 +169,7 @@ int main(int argc, char* argv[]){
     int local_nnz;
     MPI_Scatter(nnz_rank, 1, MPI_INT, &local_nnz, 1, MPI_INT, 0, MPI_COMM_WORLD); //root process, 1 element sent to each process, type, receiver , number of elements, type, root, communicator
     
+    //statistics about nnz distribution
     int min_nnz, max_nnz, sum_nnz;
     MPI_Reduce(&local_nnz, &min_nnz, 1, MPI_INT, MPI_MIN, 0, MPI_COMM_WORLD);
     MPI_Reduce(&local_nnz, &max_nnz, 1, MPI_INT, MPI_MAX, 0, MPI_COMM_WORLD);
@@ -348,6 +231,27 @@ int main(int argc, char* argv[]){
     }
 
     MPI_Bcast(vec, n_cols, MPI_DOUBLE, 0, MPI_COMM_WORLD); //simple, memory heavy approach
+    long long comm_bytes = 0;
+
+    if (rank == 0) {
+       comm_bytes = (long long)(size - 1) * n_cols * sizeof(double);
+    } else {
+       comm_bytes = (long long)n_cols * sizeof(double);
+    }
+
+    long long min_comm, max_comm, sum_comm; //sum_comm is total communication volume
+
+    MPI_Reduce(&comm_bytes, &min_comm, 1, MPI_LONG_LONG, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&comm_bytes, &max_comm, 1, MPI_LONG_LONG, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&comm_bytes, &sum_comm, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        double avg_comm = (double)sum_comm / size;
+        printf("\ncommunication volume per rank (bytes):\n");
+        printf("min per rank: %lld\n", min_comm);
+        printf("max per rank: %lld\n", max_comm);
+        printf("avg communication volume: %.2f\n", avg_comm);
+    }
 
     double *local_result = calloc(local_n_rows, sizeof(double)); //initialize to zero
 

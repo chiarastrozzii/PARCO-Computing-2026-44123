@@ -16,13 +16,14 @@ def generate_matrix(n, nnz, filename):
 
 def main():
     os.makedirs("random_matrices", exist_ok=True)
-
+    
+    #weak scaling: increasing the number of processes proportionally to the problem size
     configs = [
         (1000, 100_000),
         (2000, 200_000),
         (4000, 400_000),
         (8000, 800_000),
-        (16000, 1_600_000),
+        (16000, 1_600_000), #16 processes
     ]
 
     for n, nnz in configs:
