@@ -1,9 +1,47 @@
+#DELIVERABLE 1
 deliverable1/venv/
 deliverable1/csv_files/graphs/
 
-.vscode/
-.DS_Store
+#-------------------------------------
 
+#DELIVERABLE 2
+
+#build files
+# CMake build directory
+deliverable2/build/
+deliverable2/cmake-build-*/
+
+# CMake generated files
+deliverable2/CMakeCache.txt
+deliverable2/CMakeFiles/
+deliverable2/cmake_install.cmake
+deliverable2/Makefile
+
+#executables
 deliverable2/spmv
+
+#generated matrices
 deliverable2/random_matrices/
 
+#-------------------------------------
+
+#COMMON
+.vscode/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+#executables
+*.exe
+*.out
+
+# Object files
+*.o
+*.obj
+
+# Libraries
+*.a
+*.so
+*.dylib
