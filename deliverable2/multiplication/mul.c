@@ -7,21 +7,8 @@
 #include <string.h>
 #include <mpi.h>
 
-void spmv(const Sparse_CSR* sparse_csr, const double* vec, double* res, int parallel){ //if everything is inside the same project we can maybe create a common module
-    if (parallel == 1){
-        #pragma omp parallel for schedule(runtime)
-        for (size_t i=0; i<sparse_csr->n_rows; ++i){
-            res[i] = 0;
-            size_t nz_start = sparse_csr->row_ptrs[i];
-            size_t nz_end = sparse_csr->row_ptrs[i+1];
-        
-            for (size_t j = nz_start; j < nz_end; ++j) {
-                size_t col = sparse_csr->col_indices[j];
-                double val = sparse_csr->values[j];
-                res[i] += val * vec[col];
-            }
-        }
-    }else if(parallel == 2){
+void spmv(const Sparse_CSR* sparse_csr, const double* vec, double* res, int parallel){
+    if(parallel == 1){
         #pragma omp parallel for schedule(static)
         for (size_t i = 0; i < sparse_csr->n_rows; ++i) {
             double sum = 0.0;
@@ -53,6 +40,210 @@ void spmv(const Sparse_CSR* sparse_csr, const double* vec, double* res, int para
     
 
 }
+
+static int cmp_int(const void* a, const void *b){
+    int x = *(int*)a;
+    int y = *(int*)b;
+    return (x > y) - (x < y);
+}
+
+static int col_owner(int col, int size) {
+     return col % size; 
+}
+
+
+
+double *prepare_x_1D(const Sparse_CSR *csr, const double *x_owned, int x_owned_len, int rank, int size, int **col_map_out, int *local_x_size_out, int *tot_send, int *tot_recv){
+    int n_nz = csr->n_nz;
+
+    // Step 1: Collect all unique columns in local rows
+    int *uniq_cols = malloc(n_nz * sizeof(int));
+    int n_unique = 0;
+
+    for (int i = 0; i < n_nz; i++){
+        int col = csr->col_indices[i];
+        bool found = false;
+        for (int k = 0; k < n_unique; k++){
+            if (uniq_cols[k] == col){
+                found = true;
+                break;
+            }
+        }
+        if (!found) uniq_cols[n_unique++] = col;
+    }
+    qsort(uniq_cols, n_unique, sizeof(int), cmp_int);
+
+    //split owned vs ghost entries
+    int *owned_indices = malloc(n_unique * sizeof(int));
+    int *ghost_indices = malloc(n_unique * sizeof(int));
+    int n_owned=0, n_ghosts=0;
+
+    for (int i=0; i<n_unique; i++){
+        int col = uniq_cols[i];
+        if(col_owner(col, size) == rank){
+            owned_indices[n_owned++] = col;
+        }else{
+            ghost_indices[n_ghosts++] = col;
+        }
+    }
+    free(uniq_cols);
+
+    //communication of ghost values
+
+    int *recv_counts = calloc(size, sizeof(int));
+    for (int i = 0; i < n_ghosts; i++){
+        int owner = col_owner(ghost_indices[i], size);
+        recv_counts[owner]++;
+    }
+
+    // Step 4: Prepare recv displacements
+    int *recv_displs = malloc(size * sizeof(int));
+    recv_displs[0] = 0;
+    for (int i = 1; i < size; i++){
+        recv_displs[i] = recv_displs[i-1] + recv_counts[i-1];
+    }
+        
+    int total_recv = recv_displs[size-1] + recv_counts[size-1];
+
+    int *recv_cols = malloc(total_recv * sizeof(int));
+    int *pos = calloc(size, sizeof(int));
+    for (int i = 0; i < n_ghosts; i++){
+        int owner = col_owner(ghost_indices[i], size);
+        int idx = recv_displs[owner] + pos[owner]++;
+        recv_cols[idx] = ghost_indices[i];
+    }
+    free(pos);
+
+    //exchange requests with owners
+    int *send_counts = calloc(size, sizeof(int));
+    MPI_Alltoall(recv_counts, 1, MPI_INT, send_counts, 1, MPI_INT, MPI_COMM_WORLD);
+
+    int *send_displs = malloc(size * sizeof(int));
+    send_displs[0] = 0;
+    for (int i = 1; i < size; i++)
+        send_displs[i] = send_displs[i - 1] + send_counts[i - 1];
+
+    int total_send = send_displs[size - 1] + send_counts[size - 1];
+
+    int *send_cols = malloc(total_send * sizeof(int));
+    MPI_Alltoallv(recv_cols, recv_counts, recv_displs, MPI_INT, send_cols, send_counts, send_displs, MPI_INT, MPI_COMM_WORLD);
+
+    //owners then prepare the actual values to share
+    double *send_vals = malloc(total_send * sizeof(double));
+    for (int i = 0; i < total_send; i++) {
+        int col = send_cols[i];
+        // sanity: I should only be asked for columns I own
+        if (col_owner(col, size) != rank){
+            fprintf(stderr, "[Rank %d] ERROR: got request for col %d but owner is %d\n",
+                    rank, col, col_owner(col, size));
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+
+        int li = col/size;
+        if (li < 0 || li >= x_owned_len){
+            fprintf(stderr, "[Rank %d] ERROR: local index %d out of range for col %d (x_owned_len=%d)\n",
+                    rank, li, col, x_owned_len);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+
+        send_vals[i] = x_owned[li];
+    }
+
+    //receive ghost values
+    double *recv_vals = malloc(total_recv * sizeof(double));
+    MPI_Alltoallv(send_vals, send_counts, send_displs, MPI_DOUBLE, recv_vals, recv_counts, recv_displs, MPI_DOUBLE, MPI_COMM_WORLD);
+
+    //now that we have all entries, build the local vector
+    int local_x_size = n_owned + n_ghosts;
+    double *x_local = malloc(local_x_size * sizeof(double));
+    //global -> local column map
+    int *col_map = malloc(local_x_size * sizeof(int));
+
+    for (int i = 0; i < n_owned; i++){
+        int col = owned_indices[i];
+        int li = col/size;
+        if (li < 0 || li >= x_owned_len){
+            fprintf(stderr, "[Rank %d] ERROR: owned col %d local index %d out of range (x_owned_len=%d)\n",
+                    rank, col, li, x_owned_len);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        x_local[i] = x_owned[li];
+        col_map[i] = col;
+    }
+
+    for (int i = 0; i < n_ghosts; i++){
+        int gcol = ghost_indices[i];
+        double val = 0.0;
+        bool ok = false;
+        for (int k = 0; k < total_recv; k++){
+            if (recv_cols[k] == gcol){
+                val = recv_vals[k];
+                ok = true;
+                break;
+            }
+        }
+        if (!ok){
+            fprintf(stderr, "[Rank %d] ERROR: did not receive ghost value for col %d\n", rank, gcol);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        x_local[n_owned + i] = val;
+        col_map[n_owned + i] = gcol;
+    }
+
+    *col_map_out = col_map;
+    *local_x_size_out = local_x_size;
+    *tot_send = total_send;
+    *tot_recv = total_recv;
+        
+    //cleanup
+    free(owned_indices);
+    free(ghost_indices);
+    free(recv_counts);
+    free(recv_displs);
+    free(send_counts);
+    free(send_displs);
+    free(recv_cols);
+    free(send_cols);
+    free(send_vals);
+    free(recv_vals);
+
+    return x_local;     
+
+}
+
+//double *prepare_x_2D(const Sparse_CSR *csr, const double *vec, MPI_Comm col_comm, int **col_map_out, int *local_x_size){
+
+    //each column communicator owns a block of x
+    //broadcast that block to all ranks in the column
+    //no ghost detection needed
+    //build 
+//}
+
+
+void remapping_columns(Sparse_CSR *csr, int *col_map, int local_x_size, int rank){
+    int nnz = csr->n_nz;
+
+    int *global_to_local = malloc(csr->n_cols * sizeof(int));
+    for (int i = 0; i < csr->n_cols; i++) global_to_local[i] = -1;
+
+    for (int local_idx = 0; local_idx < local_x_size; local_idx++) {
+        int global_col = col_map[local_idx];
+        global_to_local[global_col] = local_idx;
+    }
+
+    for (int i = 0; i < nnz; i++) {
+        int g = csr->col_indices[i];
+        int l = global_to_local[g];
+        if (l < 0) {
+            fprintf(stderr, "[Rank %d] ERROR: missing mapping for global col %d\n", rank, g);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        csr->col_indices[i] = l;
+    }
+
+    free(global_to_local);
+}
+
 
 int block_size(int coord, int n, int p) {
     int base = n / p;

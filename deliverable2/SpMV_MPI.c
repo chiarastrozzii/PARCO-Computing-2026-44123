@@ -92,7 +92,28 @@ int main(int argc, char* argv[]){
         val_local = malloc(local_nnz * sizeof(double));
 
         //re-order data on rank 0 and scatter all entries to respective processes
-        scatter_entries(rank, size, n_rows, n_nz, row_indices, col_indices, values, nnz_rank, local_nnz, row_local, col_local, val_local);
+        scatter_entries(rank, size, n_nz, row_indices, col_indices, values, nnz_rank, local_nnz, row_local, col_local, val_local);
+
+        //for (int i = 0; i < local_nnz; i++) {
+        //    int local_r = row_local[i];
+        //    if (local_r < 0) {
+        //        fprintf(stderr, "[Rank %d] NEGATIVE local row %d\n", rank, local_r);
+        //        MPI_Abort(MPI_COMM_WORLD, 1);
+        //    }
+        //}
+
+       // MPI_Barrier(MPI_COMM_WORLD);
+       // for (int r = 0; r < size; r++) {
+       //     MPI_Barrier(MPI_COMM_WORLD);
+       //     if (rank == r) {
+       //         printf("\n[Rank %d] SCATTERED COO (local_row, global_col, val):\n", rank);
+       //         for (int i = 0; i < local_nnz; i++) {
+       //             printf("(%d, %d) -> %.2f\n", row_local[i], col_local[i], val_local[i]);
+       //         }
+       //         fflush(stdout);
+       //     }
+       // }
+       // MPI_Barrier(MPI_COMM_WORLD);
 
         if (rank == 0) {
             free(nnz_rank);
@@ -160,8 +181,7 @@ int main(int argc, char* argv[]){
         printf("Max nnz: %d\n", max_nnz);
         
         double avg_nnz = (double)sum_nnz / size;
-        printf("Avg nnz: %.2f\n", avg_nnz);
-        
+        printf("Avg nnz: %.2f\n", avg_nnz);    
     }
 
     //each process creates its local CSR matrix
@@ -189,10 +209,36 @@ int main(int argc, char* argv[]){
         create_sparse_csr(local_n_rows, n_cols, local_nnz, row_local, col_local, val_local, &local_csr);
     }
 
+    // 1) CSR sizes must match what we requested
+    if ((int)local_csr.n_rows != local_n_rows) {
+        fprintf(stderr, "[Rank %d] CSR n_rows mismatch: local_n_rows=%d csr.n_rows=%zu\n",
+                rank, local_n_rows, local_csr.n_rows);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
 
-    //serialized print to check the matrix
-    MPI_Barrier(MPI_COMM_WORLD); //synchronize all processes
+    if ((int)local_csr.n_nz != local_nnz) {
+        fprintf(stderr, "[Rank %d] CSR n_nz mismatch: local_nnz=%d csr.n_nz=%zu\n",
+                rank, local_nnz, local_csr.n_nz);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    // 2) CSR row_ptrs must be nondecreasing and end at n_nz
+    for (int r = 0; r < local_n_rows; r++) {
+        if (local_csr.row_ptrs[r] > local_csr.row_ptrs[r+1]) {
+            fprintf(stderr, "[Rank %d] CSR row_ptrs decrease at r=%d\n", rank, r);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+    if (local_csr.row_ptrs[local_n_rows] != (size_t)local_nnz) {
+        fprintf(stderr, "[Rank %d] CSR row_ptrs end mismatch: row_ptrs[last]=%zu local_nnz=%d\n",
+                rank, local_csr.row_ptrs[local_n_rows], local_nnz);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+
+
     for (int r = 0; r < size; r++) {
+        MPI_Barrier(MPI_COMM_WORLD);
         if (rank == r) {
             printf("\n[Rank %d] Local CSR:\n", rank);
             print_sparse_csr(&local_csr);
@@ -200,6 +246,7 @@ int main(int argc, char* argv[]){
         }
     }
     MPI_Barrier(MPI_COMM_WORLD);
+
 
     //rank 0 creates the random vector, which will be broadcasted to all processes
     double *vec = malloc(n_cols * sizeof(double));
@@ -211,16 +258,74 @@ int main(int argc, char* argv[]){
         //}   
     }
 
-    MPI_Bcast(vec, n_cols, MPI_DOUBLE, 0, MPI_COMM_WORLD); //simple, memory heavy approach
-    long long comm_bytes = 0;
+    int x_owned_n = (n_cols + size - 1 - rank) / size;   // count of cols owned by this rank
+    double *x_owned = malloc(x_owned_n * sizeof(double));
 
     if (rank == 0) {
-       comm_bytes = (long long)(size - 1) * n_cols * sizeof(double);
+        // send owned pieces to everyone (including self)
+        for (int r = 0; r < size; r++) {
+            int cnt = (n_cols + size - 1 - r) / size;
+            if (r == 0) {
+                for (int k = 0; k < cnt; k++) x_owned[k] = vec[r + k*size];
+            } else {
+                double *tmp = malloc(cnt * sizeof(double));
+                for (int k = 0; k < cnt; k++) tmp[k] = vec[r + k*size];
+                MPI_Send(tmp, cnt, MPI_DOUBLE, r, 123, MPI_COMM_WORLD);
+                free(tmp);
+            }
+        }
     } else {
-       comm_bytes = (long long)n_cols * sizeof(double);
+        MPI_Recv(x_owned, x_owned_n, MPI_DOUBLE, 0, 123, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
 
-    long long min_comm, max_comm, sum_comm; //sum_comm is total communication volume
+
+    //MPI_Bcast(vec, n_cols, MPI_DOUBLE, 0, MPI_COMM_WORLD); //simple, memory heavy approach
+
+    double *x_local;
+    int *col_map;
+    int local_x_size; 
+
+    int x_owned_len = (n_cols + size - 1 - rank) / size;    
+    int tot_send = 0;
+    int tot_recv = 0;
+
+    if (!is_2D){
+        x_local = prepare_x_1D(&local_csr, x_owned, x_owned_len, rank, size, &col_map, &local_x_size, &tot_send, &tot_recv);
+    }else{
+        //x_local = prepare_x_2D();
+    }
+
+    //test to see the x_local vec
+    //printf("[Rank %d] x_local: ", rank);
+    //for (int i = 0; i < local_x_size; i++)
+    //    printf("%f ", x_local[i]);
+    //printf("\n");
+
+    remapping_columns(&local_csr, col_map, local_x_size, rank);
+    //test to see if remapping is successfull
+    for (int i = 0; i < local_csr.n_nz; i++) {
+        if (local_csr.col_indices[i] < 0 || local_csr.col_indices[i] >= local_x_size) {
+            fprintf(stderr, "[Rank %d] BAD LOCAL COL %zu (local_x_size=%d)\n",
+                    rank, local_csr.col_indices[i], local_x_size);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+    
+    long long comm_bytes =
+    (long long)(tot_send + tot_recv) * sizeof(int) +
+    (long long)(tot_send + tot_recv) * sizeof(double);
+
+    // Optionally track sent/recv separately:
+    long long sent_bytes =
+        (long long)tot_send * sizeof(int) +
+        (long long)tot_send * sizeof(double);
+
+    long long recv_bytes =
+        (long long)tot_recv * sizeof(int) +
+        (long long)tot_recv * sizeof(double);
+
+
+    long long min_comm, max_comm, sum_comm;
 
     MPI_Reduce(&comm_bytes, &min_comm, 1, MPI_LONG_LONG, MPI_MIN, 0, MPI_COMM_WORLD);
     MPI_Reduce(&comm_bytes, &max_comm, 1, MPI_LONG_LONG, MPI_MAX, 0, MPI_COMM_WORLD);
@@ -228,22 +333,23 @@ int main(int argc, char* argv[]){
 
     if (rank == 0) {
         double avg_comm = (double)sum_comm / size;
-        printf("\ncommunication volume per rank (bytes):\n");
+        printf("\nGhost exchange communication per rank (bytes):\n");
         printf("min per rank: %lld\n", min_comm);
         printf("max per rank: %lld\n", max_comm);
-        printf("avg communication volume: %.2f\n", avg_comm);
+        printf("avg per rank: %.2f\n", avg_comm);
     }
+
 
     double *local_result = calloc(local_csr.n_rows, sizeof(double)); //initialize to zero
 
-    spmv(&local_csr, vec, local_result, 0); //warm-up run (warm caches, avoids first-run overheads)
+    spmv(&local_csr, x_local, local_result, 0); //warm-up run (warm caches, avoids first-run overheads)
     double local_times[N_RUNS];
 
     for (int run = 0; run < N_RUNS; run++) {
         MPI_Barrier(MPI_COMM_WORLD);
         double start = MPI_Wtime();
 
-        spmv(&local_csr, vec, local_result, 1); //using parallel version with OpenMP
+        spmv(&local_csr, x_local, local_result, 1); //using parallel version with OpenMP
 
         MPI_Barrier(MPI_COMM_WORLD);
         double end = MPI_Wtime();
@@ -289,10 +395,9 @@ int main(int argc, char* argv[]){
     int actual_local_rows = 0;
     if (!is_2D){
         double *y_global = gather_res_1D(local_result, actual_local_rows, local_nnz, row_local, n_rows, rank, size);
-
         if (rank == 0){
             //print result vector
-            printf("\nResult vector y:\n");
+            printf("\nResult vector y [1D CASE]:\n");
             for (size_t i = 0; i < n_rows; ++i) {
                 printf("y[%zu] = %.2f\n", i, y_global[i]);
             }
@@ -302,7 +407,7 @@ int main(int argc, char* argv[]){
         double *y_global = gather_res_2D(local_result, n_rows, p, q, pr, pc, grid_comm);
         if (pr == 0 && pc == 0){ //only rank (0,0) has the full result
             //print result vector
-            printf("\nResult vector y:\n");
+            printf("\nResult vector y [2D CASE]:\n");
             for (size_t i = 0; i < n_rows; ++i) {
                 printf("y[%zu] = %.2f\n", i, y_global[i]);
             }

@@ -7,7 +7,6 @@
 void scatter_entries(    
     int rank,
     int size,
-    int n_rows,
     int n_nz,
     const int *row_indices,
     const int *col_indices,
