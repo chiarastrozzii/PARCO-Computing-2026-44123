@@ -41,6 +41,8 @@ int main(int argc, char* argv[]){
     int* col_indices = NULL;
     double* values = NULL;
 
+    double comm_time = 0.0;
+
     if (rank == 0){
         read_matrix_market_file(matrix_file, &n_rows, &n_cols, &n_nz, &row_indices, &col_indices, &values); //only rank 0 reads the file
     }
@@ -258,6 +260,9 @@ int main(int argc, char* argv[]){
     if (!is_2D){
         int x_owned_len = (n_cols + size - 1 - rank) / size; 
         double *x_owned = malloc(x_owned_len * sizeof(double));
+
+        double t0 = MPI_Wtime();
+
         if (rank == 0) {
             // send owned pieces to everyone (including self)
             for (int r = 0; r < size; r++) {
@@ -277,6 +282,9 @@ int main(int argc, char* argv[]){
         }
 
         x_local = prepare_x_1D(&local_csr, x_owned, x_owned_len, rank, size, &col_map, &local_x_size, &tot_send, &tot_recv);
+
+        double t1 = MPI_Wtime();
+        comm_time += (t1 - t0); 
 
         long long comm_bytes =
         (long long)(tot_send + tot_recv) * (sizeof(int) + sizeof(double));
@@ -321,6 +329,8 @@ int main(int argc, char* argv[]){
 
         double *x_block = malloc(x_block_len * sizeof(double));
 
+        double t0 = MPI_Wtime();
+
         if (pr == 0){
             if (rank==0){
                 //send each block to (o, pc) -> first column
@@ -346,6 +356,9 @@ int main(int argc, char* argv[]){
         }
 
         MPI_Bcast(x_block, x_block_len, MPI_DOUBLE, 0, col_comm);
+
+        double t1 = MPI_Wtime(); 
+        comm_time += (t1 - t0); 
 
         //commiunication volume per rank in the case of 2D partitioning
         long long sent = 0, recv = 0;
@@ -432,6 +445,17 @@ int main(int argc, char* argv[]){
         printf("Avg: %.6f s\n", avg_time);
     }
 
+    double comm_max = 0.0;
+    MPI_Reduce(&comm_time, &comm_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        printf("\nset up comm vs compute breakdown:\n");
+        printf("communication time (max rank): %.6f s\n", comm_max);
+        printf("computation (SpMV avg max) time: %.6f s\n", avg_time);
+        printf("comm/compute ratio: %.3f\n", comm_max / avg_time);
+    }
+
+
     //flops + gflops calculation
     if (rank == 0) {
         long long flops = 2LL * n_nz;  
@@ -440,6 +464,46 @@ int main(int argc, char* argv[]){
         printf("Total FLOPs per SpMV: %lld\n", flops);
         printf("Performance: %.3f GFLOP/s\n", gflops);
     }
+
+    //memory footprint per rank
+    long long mem_bytes = 0;
+
+    //CSR
+    mem_bytes += (long long)(local_csr.n_rows + 1) * sizeof(size_t);
+    mem_bytes += (long long)local_csr.n_nz * sizeof(size_t);
+    mem_bytes += (long long)local_csr.n_nz * sizeof(double);
+
+    //x_local
+    mem_bytes += (long long)local_x_size * sizeof(double);
+
+    // col_map only for 1D
+    if (!is_2D && col_map) {
+        mem_bytes += (long long)local_x_size * sizeof(int);
+    }
+
+    //vec
+    mem_bytes += (long long)n_cols * sizeof(double);
+
+    //rank-0 global matrix storage (only on root)
+    if (rank == 0) {
+        mem_bytes += (long long)n_nz * sizeof(int);      // row_indices
+        mem_bytes += (long long)n_nz * sizeof(int);      // col_indices
+        mem_bytes += (long long)n_nz * sizeof(double);   // values
+    }
+
+    long long min_mem, max_mem, sum_mem;
+    MPI_Reduce(&mem_bytes, &min_mem, 1, MPI_LONG_LONG, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&mem_bytes, &max_mem, 1, MPI_LONG_LONG, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&mem_bytes, &sum_mem, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        printf("\nMemory footprint per rank (bytes):\n");
+        printf("min per rank: %lld\n", min_mem);
+        printf("max per rank: %lld\n", max_mem);
+        printf("avg per rank: %.2f\n", (double)sum_mem / size);
+    }
+
+
 
     //GATHER RESULTS
     int actual_local_rows = 0;
@@ -486,15 +550,16 @@ int main(int argc, char* argv[]){
         }
     }
 
+    free(row_local);
+    free(col_local);
+    free(val_local);
+
     if (rank == 0){
         free(row_indices);
         free(col_indices);
         free(values);
     }
 
-    free(row_local);
-    free(col_local);
-    free(val_local);
     free(vec);
     free_sparse_csr(&local_csr);
     free(x_local);
