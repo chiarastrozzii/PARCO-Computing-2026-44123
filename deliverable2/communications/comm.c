@@ -138,7 +138,7 @@ void scatter_entries_2D(
     }
 }
 
-int block_start(int coord, int n, int p) {
+int block_start(int coord, int n, int p){
     int base = n / p;
     int rem  = n % p;
 
@@ -146,4 +146,11 @@ int block_start(int coord, int n, int p) {
         return coord * (base + 1);
     else
         return coord * base + rem;
+}
+
+int block_size(int coord, int n, int p){
+    int start = block_start(coord, n, p);
+    int end = block_start(coord + 1, n, p);
+
+    return end-start;
 }

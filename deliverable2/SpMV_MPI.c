@@ -71,6 +71,8 @@ int main(int argc, char* argv[]){
     int pc, pr;
     MPI_Comm grid_comm;
 
+    MPI_Comm row_comm, col_comm;
+
 
     if (!is_2D){
         //compute ownership of rows [cyclic distribution]
@@ -94,27 +96,6 @@ int main(int argc, char* argv[]){
         //re-order data on rank 0 and scatter all entries to respective processes
         scatter_entries(rank, size, n_nz, row_indices, col_indices, values, nnz_rank, local_nnz, row_local, col_local, val_local);
 
-        //for (int i = 0; i < local_nnz; i++) {
-        //    int local_r = row_local[i];
-        //    if (local_r < 0) {
-        //        fprintf(stderr, "[Rank %d] NEGATIVE local row %d\n", rank, local_r);
-        //        MPI_Abort(MPI_COMM_WORLD, 1);
-        //    }
-        //}
-
-       // MPI_Barrier(MPI_COMM_WORLD);
-       // for (int r = 0; r < size; r++) {
-       //     MPI_Barrier(MPI_COMM_WORLD);
-       //     if (rank == r) {
-       //         printf("\n[Rank %d] SCATTERED COO (local_row, global_col, val):\n", rank);
-       //         for (int i = 0; i < local_nnz; i++) {
-       //             printf("(%d, %d) -> %.2f\n", row_local[i], col_local[i], val_local[i]);
-       //         }
-       //         fflush(stdout);
-       //     }
-       // }
-       // MPI_Barrier(MPI_COMM_WORLD);
-
         if (rank == 0) {
             free(nnz_rank);
         }
@@ -126,7 +107,7 @@ int main(int argc, char* argv[]){
 
         int dims[2] = {p, q};
         int periods[2] = {0, 0};
-        MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, 1, &grid_comm);
+        MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, 0, &grid_comm);
 
         int coords[2];
         MPI_Cart_coords(grid_comm, rank, 2, coords);
@@ -199,17 +180,14 @@ int main(int argc, char* argv[]){
         }
         create_sparse_csr(local_n_rows, n_cols, local_nnz, row_local, col_local, val_local, &local_csr);
     }else{
-        // Find how many distinct rows this rank owns
-        local_n_rows = 0;
-        for (int i = 0; i < local_nnz; i++) {
-            if (row_local[i] + 1 > local_n_rows)
-                local_n_rows = row_local[i] + 1;
-        }
+        // ind how many distinct rows this rank owns
+        local_n_rows = block_start(pr+1, n_rows, p) - block_start(pr, n_rows, p);
+        int local_n_cols = block_start(pc+1, n_cols,q) - block_start(pc, n_cols, q);
 
-        create_sparse_csr(local_n_rows, n_cols, local_nnz, row_local, col_local, val_local, &local_csr);
+        create_sparse_csr(local_n_rows, local_n_cols, local_nnz, row_local, col_local, val_local, &local_csr);
     }
 
-    // 1) CSR sizes must match what we requested
+    //CSR sizes must match what is requested
     if ((int)local_csr.n_rows != local_n_rows) {
         fprintf(stderr, "[Rank %d] CSR n_rows mismatch: local_n_rows=%d csr.n_rows=%zu\n",
                 rank, local_n_rows, local_csr.n_rows);
@@ -222,7 +200,7 @@ int main(int argc, char* argv[]){
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
-    // 2) CSR row_ptrs must be nondecreasing and end at n_nz
+    //CSR row_ptrs must be nondecreasing and end at n_nz
     for (int r = 0; r < local_n_rows; r++) {
         if (local_csr.row_ptrs[r] > local_csr.row_ptrs[r+1]) {
             fprintf(stderr, "[Rank %d] CSR row_ptrs decrease at r=%d\n", rank, r);
@@ -258,64 +236,113 @@ int main(int argc, char* argv[]){
         //}   
     }
 
-    int x_owned_n = (n_cols + size - 1 - rank) / size;   // count of cols owned by this rank
-    double *x_owned = malloc(x_owned_n * sizeof(double));
-
+    double *y_ref = NULL;
     if (rank == 0) {
-        // send owned pieces to everyone (including self)
-        for (int r = 0; r < size; r++) {
-            int cnt = (n_cols + size - 1 - r) / size;
-            if (r == 0) {
-                for (int k = 0; k < cnt; k++) x_owned[k] = vec[r + k*size];
-            } else {
-                double *tmp = malloc(cnt * sizeof(double));
-                for (int k = 0; k < cnt; k++) tmp[k] = vec[r + k*size];
-                MPI_Send(tmp, cnt, MPI_DOUBLE, r, 123, MPI_COMM_WORLD);
-                free(tmp);
-            }
+        y_ref = calloc(n_rows, sizeof(double));
+        for (int k = 0; k < n_nz; k++) {
+            int r = row_indices[k];
+            int c = col_indices[k];
+            y_ref[r] += values[k] * vec[c];
         }
-    } else {
-        MPI_Recv(x_owned, x_owned_n, MPI_DOUBLE, 0, 123, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
-
 
     //MPI_Bcast(vec, n_cols, MPI_DOUBLE, 0, MPI_COMM_WORLD); //simple, memory heavy approach
 
     double *x_local;
-    int *col_map;
+    int *col_map = NULL;
     int local_x_size; 
-
-    int x_owned_len = (n_cols + size - 1 - rank) / size;    
+   
     int tot_send = 0;
     int tot_recv = 0;
 
     if (!is_2D){
-        x_local = prepare_x_1D(&local_csr, x_owned, x_owned_len, rank, size, &col_map, &local_x_size, &tot_send, &tot_recv);
-    }else{
-        //x_local = prepare_x_2D();
-    }
+        int x_owned_len = (n_cols + size - 1 - rank) / size; 
+        double *x_owned = malloc(x_owned_len * sizeof(double));
+        if (rank == 0) {
+            // send owned pieces to everyone (including self)
+            for (int r = 0; r < size; r++) {
+                int cnt = (n_cols + size - 1 - r) / size;
+                if (r == 0) {
+                    for (int k = 0; k < cnt; k++) x_owned[k] = vec[r + k*size];
+                } else {
+                    double *tmp = malloc(cnt * sizeof(double));
+                    for (int k = 0; k < cnt; k++) tmp[k] = vec[r + k*size];
+                    MPI_Send(tmp, cnt, MPI_DOUBLE, r, 123, MPI_COMM_WORLD);
+                    free(tmp);
+                }
+            }
 
-    //test to see the x_local vec
-    //printf("[Rank %d] x_local: ", rank);
-    //for (int i = 0; i < local_x_size; i++)
-    //    printf("%f ", x_local[i]);
-    //printf("\n");
-
-    remapping_columns(&local_csr, col_map, local_x_size, rank);
-    //test to see if remapping is successfull
-    for (int i = 0; i < local_csr.n_nz; i++) {
-        if (local_csr.col_indices[i] < 0 || local_csr.col_indices[i] >= local_x_size) {
-            fprintf(stderr, "[Rank %d] BAD LOCAL COL %zu (local_x_size=%d)\n",
-                    rank, local_csr.col_indices[i], local_x_size);
-            MPI_Abort(MPI_COMM_WORLD, 1);
+        }else {
+            MPI_Recv(x_owned, x_owned_len, MPI_DOUBLE, 0, 123, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         }
+
+        x_local = prepare_x_1D(&local_csr, x_owned, x_owned_len, rank, size, &col_map, &local_x_size, &tot_send, &tot_recv);
+
+        //test to see the x_local vec
+        //printf("[Rank %d] x_local: ", rank);
+        //for (int i = 0; i < local_x_size; i++)
+        //    printf("%f ", x_local[i]);
+        //printf("\n");
+
+        remapping_columns(&local_csr, col_map, local_x_size, rank);
+
+        //test to see if remapping is successfull
+        for (int i = 0; i < local_csr.n_nz; i++) {
+            if (local_csr.col_indices[i] < 0 || local_csr.col_indices[i] >= local_x_size) {
+                fprintf(stderr, "[Rank %d] BAD LOCAL COL %zu (local_x_size=%d)\n",
+                        rank, local_csr.col_indices[i], local_x_size);
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+        }
+
+        free(x_owned);
+
+    }else{
+        MPI_Comm_split(grid_comm, pr, pc, &row_comm);
+        MPI_Comm_split(grid_comm, pc, pr, &col_comm);
+
+        int x_block_len = block_size(pc, n_cols, q);
+        int x_start = block_start(pc, n_cols, q);
+
+        double *x_block = malloc(x_block_len * sizeof(double));
+
+        if (pr == 0){
+            if (rank==0){
+                //send each block to (o, pc) -> first column
+                for (int dest_pc = 0; dest_pc < q; dest_pc++) {
+                    int len = block_size(dest_pc, n_cols, q);
+                    int start = block_start(dest_pc, n_cols, q);
+
+                    if (dest_pc == 0) {
+                        memcpy(x_block, vec + start, len * sizeof(double));
+                    } else {
+                        int coords2[2] = {0, dest_pc};
+                        int dest_rank;
+                        MPI_Cart_rank(grid_comm, coords2, &dest_rank);
+                        MPI_Send(vec + start, len, MPI_DOUBLE, dest_rank, 111, grid_comm); //pointer to the starting element of data to send, num of elements to send, data type of each element, rank of dest process, message tag
+                    }
+                }
+            }else{
+                int coords0[2] = {0, 0};
+                int root_rank;
+                MPI_Cart_rank(grid_comm, coords0, &root_rank);
+                MPI_Recv(x_block, x_block_len, MPI_DOUBLE, root_rank, 111, grid_comm, MPI_STATUS_IGNORE);
+            }
+        }
+
+        MPI_Bcast(x_block, x_block_len, MPI_DOUBLE, 0, col_comm);
+
+        x_local = x_block;
+        local_x_size = x_block_len;
+
+        MPI_Comm_free(&row_comm);
+        MPI_Comm_free(&col_comm);
     }
     
     long long comm_bytes =
     (long long)(tot_send + tot_recv) * sizeof(int) +
     (long long)(tot_send + tot_recv) * sizeof(double);
 
-    // Optionally track sent/recv separately:
     long long sent_bytes =
         (long long)tot_send * sizeof(int) +
         (long long)tot_send * sizeof(double);
@@ -401,6 +428,17 @@ int main(int argc, char* argv[]){
             for (size_t i = 0; i < n_rows; ++i) {
                 printf("y[%zu] = %.2f\n", i, y_global[i]);
             }
+            
+            //JUST TO TEST
+            for (int i = 0; i < n_rows; i++) {
+                if (fabs(y_global[i] - y_ref[i]) > 1e-9) {
+                    printf("❌ MISMATCH at row %d: parallel=%.6f  ref=%.6f\n", i, y_global[i], y_ref[i]);
+                break;
+                }
+            }
+
+            printf("serial reference check passed");
+            free(y_ref);
             free(y_global);
         }
     }else{
@@ -411,6 +449,16 @@ int main(int argc, char* argv[]){
             for (size_t i = 0; i < n_rows; ++i) {
                 printf("y[%zu] = %.2f\n", i, y_global[i]);
             }
+
+            //JUST TO TEST
+            for (int i = 0; i < n_rows; i++) {
+                if (fabs(y_global[i] - y_ref[i]) > 1e-9) {
+                    printf("❌ MISMATCH at row %d: parallel=%.6f  ref=%.6f\n", i, y_global[i], y_ref[i]);
+                break;
+                }
+            }
+
+            free(y_ref);
             free(y_global);
         }
     }
@@ -426,6 +474,11 @@ int main(int argc, char* argv[]){
     free(val_local);
     free(vec);
     free_sparse_csr(&local_csr);
+    free(x_local);
+    if(col_map){ //only free it if not NULL
+        free(col_map);
+    }
+    
 
     MPI_Finalize();
     return 0;

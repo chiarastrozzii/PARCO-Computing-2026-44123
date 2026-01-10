@@ -1,4 +1,5 @@
 #include "mul.h"
+#include "../communications/comm.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -211,14 +212,6 @@ double *prepare_x_1D(const Sparse_CSR *csr, const double *x_owned, int x_owned_l
 
 }
 
-//double *prepare_x_2D(const Sparse_CSR *csr, const double *vec, MPI_Comm col_comm, int **col_map_out, int *local_x_size){
-
-    //each column communicator owns a block of x
-    //broadcast that block to all ranks in the column
-    //no ghost detection needed
-    //build 
-//}
-
 
 void remapping_columns(Sparse_CSR *csr, int *col_map, int local_x_size, int rank){
     int nnz = csr->n_nz;
@@ -244,12 +237,6 @@ void remapping_columns(Sparse_CSR *csr, int *col_map, int local_x_size, int rank
     free(global_to_local);
 }
 
-
-int block_size(int coord, int n, int p) {
-    int base = n / p;
-    int rem  = n % p;
-    return (coord < rem) ? base + 1 : base;
-}
 
 double *gather_res_1D(double *local_result, int actual_local_rows, int local_nnz, int *row_local, int n_rows, int rank, int size){
     //gather number of local rows for each rank
@@ -311,8 +298,8 @@ double *gather_res_1D(double *local_result, int actual_local_rows, int local_nnz
 
 double *gather_res_2D(double* local_result, int n_rows, int p, int q, int pr, int pc, MPI_Comm grid_comm) {
     //compute local block size
-    int row_start = (pr * n_rows) / p;
-    int row_end = ((pr + 1) * n_rows) / p;
+    int row_start = block_start(pr, n_rows, p);
+    int row_end = block_start(pr + 1, n_rows, p);
     int local_n_rows= row_end - row_start;
     int sendcount = local_n_rows; //to be sent from each process, needed so that the receiver count matches the sender count
 
@@ -327,7 +314,7 @@ double *gather_res_2D(double* local_result, int n_rows, int p, int q, int pr, in
 
     //gather only from pc==0 ranks
     MPI_Comm col0_comm; //communicator for column 0
-    MPI_Comm_split(MPI_COMM_WORLD, pc == 0 ? 0 : MPI_UNDEFINED, pr, &col0_comm); //split communicator, if the process is in column 0, it gets color 0, else MPI_UNDEFINED (does not join communicator)
+    MPI_Comm_split(grid_comm, pc == 0 ? 0 : MPI_UNDEFINED, pr, &col0_comm); //split communicator, if the process is in column 0, it gets color 0, else MPI_UNDEFINED (does not join communicator)
     //processes with color 0 are ranked in ascending order of pr
 
     int col0_rank = -1;
