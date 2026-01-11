@@ -10,15 +10,23 @@ if [ ! -f /opt/homebrew/opt/libomp/lib/libomp.dylib ]; then
   exit 1
 fi
 
+# Ensure MPI is installed
+if ! command -v mpicc >/dev/null 2>&1; then
+  echo "❌ mpicc not found. Install MPI with:"
+  echo "   brew install open-mpi"
+  exit 1
+fi
+
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
+rm -rf "$PROJECT_ROOT/build"
 mkdir -p "$PROJECT_ROOT/build"
 cd "$PROJECT_ROOT/build"
 
-cmake \
-  -DCMAKE_C_COMPILER=mpicc \
-  -DOpenMP_omp_LIBRARY=/opt/homebrew/opt/libomp/lib/libomp.dylib \
-  ..
+cmake .. \
+  -DCMAKE_C_COMPILER=clang \
+  -DMPI_C_COMPILER="$(command -v mpicc)" \
+  -DCMAKE_PREFIX_PATH="/opt/homebrew/opt/open-mpi;/opt/homebrew/opt/libomp" \
 
 make -j
 

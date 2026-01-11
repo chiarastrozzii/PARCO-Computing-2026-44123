@@ -20,20 +20,30 @@ int main(int argc, char* argv[]){
     MPI_Comm_rank(MPI_COMM_WORLD, &rank); //addressing all processes using MPI_COMM_WORLD, we're giving each process a unique id
     MPI_Comm_size(MPI_COMM_WORLD, &size); //total number of processes
 
-    if (argc < 2){
+    if (argc < 4){
         if (rank == 0){
-            fprintf(stderr, "Usage: %s <matrix_file> <2D/1D>\n", argv[0]);
+            fprintf(stderr, "Usage: %s <matrix_file> <2D/1D> <SEQ/PAR> \n", argv[0]);
         }
         MPI_Finalize();
         return EXIT_FAILURE;
     }
 
     bool is_2D = false;
-    if (argc >= 3){
-        if (strcmp(argv[2], "2D") == 0){
-            is_2D = true;
-        }
+    bool parallel = false;
+
+    if (strcmp(argv[2], "2D") == 0){
+        is_2D = true;
     }
+
+    if (strcmp(argv[3], "PAR") == 0){
+        parallel = true;
+    }
+
+    if (rank == 0) {
+        printf("decomposition: %s | mode: %s\n", is_2D ? "2D" : "1D", parallel ? "OpenMP" : "Sequential");
+    }
+
+
 
     const char* matrix_file = argv[1];
     int n_rows, n_cols, n_nz;
@@ -405,14 +415,16 @@ int main(int argc, char* argv[]){
 
     double *local_result = calloc(local_csr.n_rows, sizeof(double)); //initialize to zero
 
-    spmv(&local_csr, x_local, local_result, 0); //warm-up run (warm caches, avoids first-run overheads)
+    int openmp = parallel ? 1 : 0;
+
+    spmv(&local_csr, x_local, local_result, openmp); //warm-up run (warm caches, avoids first-run overheads)
     double local_times[N_RUNS];
 
     for (int run = 0; run < N_RUNS; run++) {
         MPI_Barrier(MPI_COMM_WORLD);
         double start = MPI_Wtime();
 
-        spmv(&local_csr, x_local, local_result, 1); //using parallel version with OpenMP
+        spmv(&local_csr, x_local, local_result, openmp); //using parallel version with OpenMP
 
         MPI_Barrier(MPI_COMM_WORLD);
         double end = MPI_Wtime();
@@ -449,10 +461,10 @@ int main(int argc, char* argv[]){
     MPI_Reduce(&comm_time, &comm_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
-        printf("\nset up comm vs compute breakdown:\n");
-        printf("communication time (max rank): %.6f s\n", comm_max);
-        printf("computation (SpMV avg max) time: %.6f s\n", avg_time);
-        printf("comm/compute ratio: %.3f\n", comm_max / avg_time);
+        printf("\nset up comm vs SpMV compute breakdown:\n");
+        printf("set up communication time (max rank): %.6f s\n", comm_max);
+        printf("SpMV avg time per iteration (max over ranks): %.6f s\n", avg_time);
+        printf("setup_comm/spmv_time ratio: %.3f\n", comm_max / avg_time);
     }
 
 

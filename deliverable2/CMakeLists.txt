@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(SpMV_MPI LANGUAGES C)
 
-find_package(MPI REQUIRED)
+find_package(MPI REQUIRED COMPONENTS C)
 find_package(OpenMP REQUIRED)
 
 add_executable(spmv
