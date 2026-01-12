@@ -10,8 +10,9 @@ DIMENSIONS=("1D" "2D")
 MODES=("SEQ" "PAR")
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_DIR="$SCRIPT_DIR/../build"                 # ./spmv is here (deliverable2/build)
-RANDOM_DIR="$RUN_DIR/../random_matrices"       # deliverable2/random_matrices
+PROJECT_ROOT="$SCRIPT_DIR/.."
+RUN_DIR="$PROJECT_ROOT/build"                 # ./spmv is here (deliverable2/build)
+RANDOM_DIR="$PROJECT_ROOT/random_matrices"       # deliverable2/random_matrices
 
 RESULTS_DIR="$SCRIPT_DIR/results_weak/"
 mkdir -p "$RESULTS_DIR"
@@ -23,8 +24,8 @@ echo "Results will be stored in: $RESULTS_DIR"
 echo "CSV summaries will be stored in: $CSV_DIR"
 echo
 
-echo "Building project (cd .. && ./scripts/build_mac.sh) ..."
-pushd "$RUN_DIR/.." >/dev/null
+echo "Building project (cd .. && ./scripts/build_mac.sh) ..." #modify in cluster
+pushd "$PROJECT_ROOT" >/dev/null
 ./scripts/build_mac.sh
 popd >/dev/null
 echo "Build done."
