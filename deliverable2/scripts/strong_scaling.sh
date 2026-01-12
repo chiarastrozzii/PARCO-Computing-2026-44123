@@ -19,6 +19,7 @@ RUN_DIR="$SCRIPT_DIR/../build"
 
 RESULTS_DIR="$SCRIPT_DIR/results_strong/"
 mkdir -p "$RESULTS_DIR"
+mkdir -p "$RESULTS_DIR/summary_csvs"
 
 echo "Results will be stored in: $RESULTS_DIR"
 echo
@@ -39,7 +40,7 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
     #one CSV per (DIMENSION, MODE)
     SUMMARY_CSV="$RESULTS_DIR/summary_csvs/summary__${DIMENSION}__${MODE}.csv"
     if [[ ! -f "$SUMMARY_CSV" ]]; then
-      echo "matrix,dimension,mode,np,avg_time_s,baseline_s,speedup,efficiency" >"$SUMMARY_CSV"
+      echo "matrix,dimension,mode,np,avg_time_s,p90_time_s,baseline_s,speedup,efficiency" >"$SUMMARY_CSV"
     fi
 
     for NP in "${PROCS_LIST_DEFAULT[@]}"; do
@@ -51,7 +52,6 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
 
       if [[ "$MODE" == "PAR" ]]; then
         export OMP_NUM_THREADS=4
-        echo "OMP_NUM_THREADS=$OMP_NUM_THREADS" >>"$OUT_FILE"
       else
         unset OMP_NUM_THREADS || true
       fi
@@ -98,8 +98,9 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
 
         SPEEDUP="$(awk -v b="$BASELINE_S" -v t="$AVG_TIME_S" 'BEGIN{printf "%.6f", b/t}')"
         EFFICIENCY="$(awk -v s="$SPEEDUP" -v p="$NP" 'BEGIN{printf "%.6f", s/p}')"
+        P90_TIME_S="$(awk '/SpMV Time over/{flag=1;next} flag && $1=="P90:"{gsub("s","",$2); print $2; exit}' <<<"$RUN_OUTPUT")"
 
-        echo "${MATRIX},${DIMENSION},${MODE},${NP},${AVG_TIME_S},${BASELINE_S},${SPEEDUP},${EFFICIENCY}" >>"$SUMMARY_CSV"
+        echo "${MATRIX},${DIMENSION},${MODE},${NP},${AVG_TIME_S},${P90_TIME_S},${BASELINE_S},${SPEEDUP},${EFFICIENCY}" >>"$SUMMARY_CSV"
       done
 
     done

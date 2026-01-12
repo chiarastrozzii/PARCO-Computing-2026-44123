@@ -37,7 +37,7 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
   for MODE in "${MODES[@]}"; do
 
     SUMMARY_CSV="$CSV_DIR/summary__weak__${DIMENSION}__${MODE}.csv"
-    echo "matrix,n,nnz,np,dimension,mode,avg_time_s,baseline_s,weak_speedup,weak_efficiency" >"$SUMMARY_CSV"
+    echo "matrix,n,nnz,np,dimension,mode,avg_time_s,p90_time_s,baseline_s,weak_speedup,weak_efficiency" >"$SUMMARY_CSV"
 
     BASELINE_S=""
 
@@ -99,8 +99,9 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
       # Weak scaling: ideal is constant time, so efficiency = baseline / current
       WEAK_SPEEDUP="$(awk -v b="$BASELINE_S" -v t="$AVG_TIME_S" 'BEGIN{printf "%.6f", b/t}')"
       WEAK_EFF="$(awk -v ws="$WEAK_SPEEDUP" 'BEGIN{printf "%.6f", ws}')"
+      P90_TIME_S="$(awk '/SpMV Time over/{flag=1;next} flag && $1=="P90:"{gsub("s","",$2); print $2; exit}' <<<"$RUN_OUTPUT")"
 
-      echo "${MATRIX_FILE},${N},${NNZ},${NP},${DIMENSION},${MODE},${AVG_TIME_S},${BASELINE_S},${WEAK_SPEEDUP},${WEAK_EFF}" >>"$SUMMARY_CSV"
+      echo "${MATRIX_FILE},${N},${NNZ},${NP},${DIMENSION},${MODE},${AVG_TIME_S},${P90_TIME_S},${BASELINE_S},${WEAK_SPEEDUP},${WEAK_EFF}" >>"$SUMMARY_CSV"
 
     done
   done

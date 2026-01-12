@@ -13,6 +13,12 @@
 
 #define N_RUNS 100
 
+static int cmp_double(const void* a, const void* b){
+    double x = *(const double*)a;
+    double y = *(const double*)b;
+    return (x > y) - (x < y);
+}
+
 int main(int argc, char* argv[]){
     MPI_Init(&argc, &argv);
 
@@ -451,10 +457,21 @@ int main(int argc, char* argv[]){
 
         avg_time /= N_RUNS;
 
+        double sorted_times[N_RUNS];
+        memcpy(sorted_times, max_times, N_RUNS * sizeof(double));
+        qsort(sorted_times, N_RUNS, sizeof(double), cmp_double);
+
+        int p90_index = (int)ceil(0.9 * N_RUNS) - 1;
+        if (p90_index < 0) p90_index = 0;
+        if (p90_index >= N_RUNS) p90_index = N_RUNS - 1;
+
+        double p90_time = sorted_times[p90_index];
+
         printf("\nSpMV Time over %d iterations:\n", N_RUNS);
         printf("Min: %.6f s\n", min_time);
         printf("Max: %.6f s\n", max_time);
         printf("Avg: %.6f s\n", avg_time);
+        printf("P90: %.6f s\n", p90_time);
     }
 
     double comm_max = 0.0;
