@@ -14,8 +14,8 @@ MODES=("SEQ" "PAR")
 PROCS_LIST_DEFAULT=("1" "2" "4" "8") #modify in cluster
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-RUN_DIR="$SCRIPT_DIR/../build"
+PROJECT_ROOT="$SCRIPT_DIR/.."
+RUN_DIR="$PROJECT_ROOT/build"
 
 RESULTS_DIR="$SCRIPT_DIR/results_strong/"
 mkdir -p "$RESULTS_DIR"
@@ -25,8 +25,8 @@ echo "Results will be stored in: $RESULTS_DIR"
 echo
 
 echo "Building project (cd .. && ./scripts/build_mac.sh) ..."
-pushd "$RUN_DIR/.." >/dev/null
-./scripts/build_mac.sh
+pushd "$PROJECT_ROOT" >/dev/null
+./scripts/build_mac.sh #MODIFY IN CLUSTER
 popd >/dev/null
 echo "Build done."
 echo
