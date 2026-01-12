@@ -49,12 +49,6 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
         continue
       fi
 
-      OUT_FILE="$RESULTS_DIR/all_matrices__np${NP}__${DIMENSION}__${MODE}.log"
-
-      echo "============================================================" >>"$OUT_FILE"
-      echo "RUN: DIMENSION=$DIMENSION MODE=$MODE NP=$NP" >>"$OUT_FILE"
-      echo "============================================================" >>"$OUT_FILE"
-
       if [[ "$MODE" == "PAR" ]]; then
         export OMP_NUM_THREADS=4
         echo "OMP_NUM_THREADS=$OMP_NUM_THREADS" >>"$OUT_FILE"
@@ -63,6 +57,16 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
       fi
 
       for MATRIX in "${MATRICES[@]}"; do
+
+        OUT_FILE="$RESULTS_DIR/${MATRIX%.mtx}.log"
+
+        echo "============================================================" >>"$OUT_FILE"
+        echo "RUN: MATRIX=$MATRIX DIMENSION=$DIMENSION MODE=$MODE NP=$NP" >>"$OUT_FILE"
+        if [[ "$MODE" == "PAR" ]]; then
+          echo "OMP_NUM_THREADS=$OMP_NUM_THREADS" >>"$OUT_FILE"
+        fi
+        echo "============================================================" >>"$OUT_FILE"
+
         echo "---- MATRIX: $MATRIX ----" | tee -a "$OUT_FILE"
 
         RUN_OUTPUT="$(mpirun -np "$NP" ./spmv "../../matrix_mkt/$MATRIX" "$DIMENSION" "$MODE" 2>&1 | tee -a "$OUT_FILE")"
@@ -80,10 +84,9 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
         # Store baseline (NP=1) per (matrix, dimension, mode) in a variable name
         BASELINE_FILE="$RESULTS_DIR/baselines__${DIMENSION}__${MODE}.csv"
         touch "$BASELINE_FILE"
-        
+
         # Save / load baseline (NP=1) per matrix
         if (( NP == 1 )); then
-          # remove any previous baseline for this matrix, then add the new one
           grep -v "^${MATRIX}," "$BASELINE_FILE" > "${BASELINE_FILE}.tmp" || true
           mv "${BASELINE_FILE}.tmp" "$BASELINE_FILE"
           echo "${MATRIX},${AVG_TIME_S}" >> "$BASELINE_FILE"
@@ -104,6 +107,8 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
 done
 
 popd >/dev/null
+
+rm -f "$RESULTS_DIR"/baselines__*.csv
 
 echo
 echo "All runs completed."
