@@ -21,7 +21,10 @@ deliverable2/Makefile
 deliverable2/spmv
 
 #generated matrices
-deliverable2/random_matrices/
+deliverable2/random_matrices
+
+#logs
+deliverable2/scripts/results_strong
 
 #-------------------------------------
 

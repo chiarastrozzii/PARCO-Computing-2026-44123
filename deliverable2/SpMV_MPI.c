@@ -370,7 +370,7 @@ int main(int argc, char* argv[]){
         double t1 = MPI_Wtime(); 
         comm_time += (t1 - t0); 
 
-        //commiunication volume per rank in the case of 2D partitioning
+        //communication volume per rank in the case of 2D partitioning
         long long sent = 0, recv = 0;
         if (pr == 0) {
             if (pc == 0) {
