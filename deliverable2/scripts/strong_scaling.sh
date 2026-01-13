@@ -51,7 +51,7 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
       fi
 
       if [[ "$MODE" == "PAR" ]]; then
-        export OMP_NUM_THREADS=4
+        export OMP_NUM_THREADS=1
       else
         unset OMP_NUM_THREADS || true
       fi
