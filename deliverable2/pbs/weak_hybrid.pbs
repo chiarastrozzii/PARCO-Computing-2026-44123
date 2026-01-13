@@ -1,0 +1,21 @@
+#!/bin/bash
+#PBS -N spmv_weak_hybrid
+#PBS -q short_cpuQ
+#PBS -l walltime=00:30:00
+#PBS -l select=2:ncpus=64:mem=4gb
+#PBS -o job_weak_hybrid.out
+#PBS -e job_weak_hybrid.err
+
+set -euo pipefail
+
+cd "$PBS_O_WORKDIR"
+
+module purge
+module load cmake-3.15.4
+module load mpich-3.2.1--gcc-9.1.0
+
+export OMP_PROC_BIND=close
+export OMP_PLACES=cores
+
+#add in cluster build from pbs and remove build from script
+./scripts/weak_scaling_hybrid.sh
