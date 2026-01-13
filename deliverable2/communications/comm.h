@@ -37,6 +37,6 @@ void scatter_entries_2D(
 
 int block_start(int coord, int n, int p);
 int block_size(int coord, int n, int p);
-static int owner_block(int idx, int n, int P);
+int owner_block(int idx, int n, int P);
 
 #endif // COMM_H

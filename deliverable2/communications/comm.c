@@ -108,7 +108,7 @@ void scatter_entries_2D(
         for (int i = 0; i < n_nz; i++) {
             int pr = owner_block(row_indices[i], n_rows, p);
             int pc = owner_block(col_indices[i], n_cols, q);
-                
+
             if (pr < 0 || pc < 0) {
                 fprintf(stderr, "owner_block failed for (%d,%d)\n", row_indices[i], col_indices[i]);
                 exit(1);
@@ -172,7 +172,7 @@ int block_size(int coord, int n, int p){
     return end-start;
 }
 
-static int owner_block(int idx, int n, int P) {
+int owner_block(int idx, int n, int P) {
     int lo = 0, hi = P - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
