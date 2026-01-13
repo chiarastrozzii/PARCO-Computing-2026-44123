@@ -11,8 +11,8 @@ MODES=("SEQ" "PAR")
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR/.."
-RUN_DIR="$PROJECT_ROOT/build"                 # ./spmv is here (deliverable2/build)
-RANDOM_DIR="$PROJECT_ROOT/random_matrices"       # deliverable2/random_matrices
+RUN_DIR="$PROJECT_ROOT/build"                  # ./spmv is here
+RANDOM_DIR="$PROJECT_ROOT/random_matrices"     # matrices live here
 
 RESULTS_DIR="$SCRIPT_DIR/results_weak/"
 mkdir -p "$RESULTS_DIR"
@@ -24,15 +24,20 @@ echo "Results will be stored in: $RESULTS_DIR"
 echo "CSV summaries will be stored in: $CSV_DIR"
 echo
 
-echo "Building project (cd .. && ./scripts/build_mac.sh) ..." #modify in cluster
+# PBS-aware mpirun (works both locally and on 2 nodes in PBS)
+MPI_LAUNCH=(mpirun)
+if [[ -n "${PBS_NODEFILE:-}" && -f "${PBS_NODEFILE:-}" ]]; then
+  MPI_LAUNCH+=( -hostfile "$PBS_NODEFILE" )
+fi
+
+echo "Building project ..."
 pushd "$PROJECT_ROOT" >/dev/null
-./scripts/build_mac.sh
+./scripts/build_mac.sh   # MODIFY on cluster if needed
 popd >/dev/null
 echo "Build done."
 echo
 
 pushd "$RUN_DIR" >/dev/null
-
 
 for DIMENSION in "${DIMENSIONS[@]}"; do
   for MODE in "${MODES[@]}"; do
@@ -65,6 +70,9 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
       echo "============================================================" >>"$OUT_FILE"
       echo "WEAK RUN: N=$N NNZ=$NNZ NP=$NP DIMENSION=$DIMENSION MODE=$MODE" >>"$OUT_FILE"
       echo "MATRIX: $MATRIX_FILE" >>"$OUT_FILE"
+      if [[ -n "${PBS_NODEFILE:-}" && -f "${PBS_NODEFILE:-}" ]]; then
+        echo "PBS nodes allocated: $(wc -l < "$PBS_NODEFILE") slots (file: $PBS_NODEFILE)" >>"$OUT_FILE"
+      fi
       echo "============================================================" >>"$OUT_FILE"
 
       if [[ "$MODE" == "PAR" ]]; then
@@ -76,18 +84,23 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
 
       echo "---- MATRIX: $MATRIX_FILE ----" | tee -a "$OUT_FILE"
 
-      RUN_OUTPUT="$(mpirun -np "$NP" ./spmv "../random_matrices/$MATRIX_FILE" "$DIMENSION" "$MODE" 2>&1 | tee -a "$OUT_FILE")"
+      RUN_OUTPUT="$(
+        "${MPI_LAUNCH[@]}" -np "$NP" \
+          ./spmv "../random_matrices/$MATRIX_FILE" "$DIMENSION" "$MODE" \
+          2>&1 | tee -a "$OUT_FILE"
+      )"
 
       echo | tee -a "$OUT_FILE"
 
       AVG_TIME_S="$(awk '/SpMV Time over 100 iterations:/{flag=1;next} flag && $1=="Avg:"{gsub("s","",$2); print $2; exit}' <<<"$RUN_OUTPUT")"
+      P90_TIME_S="$(awk '/SpMV Time over/{flag=1;next} flag && $1=="P90:"{gsub("s","",$2); print $2; exit}' <<<"$RUN_OUTPUT")"
 
       if [[ -z "${AVG_TIME_S:-}" ]]; then
         echo "WARN: Could not parse Avg time for $MATRIX_FILE (N=$N NNZ=$NNZ NP=$NP $DIMENSION $MODE)" | tee -a "$OUT_FILE"
         continue
       fi
 
-      # Baseline for weak scaling: the NP=1 configuration (first / smallest problem)
+      # Baseline for weak scaling: NP=1
       if (( NP == 1 )); then
         BASELINE_S="$AVG_TIME_S"
       fi
@@ -97,10 +110,8 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
         continue
       fi
 
-      # Weak scaling: ideal is constant time, so efficiency = baseline / current
       WEAK_SPEEDUP="$(awk -v b="$BASELINE_S" -v t="$AVG_TIME_S" 'BEGIN{printf "%.6f", b/t}')"
       WEAK_EFF="$(awk -v ws="$WEAK_SPEEDUP" 'BEGIN{printf "%.6f", ws}')"
-      P90_TIME_S="$(awk '/SpMV Time over/{flag=1;next} flag && $1=="P90:"{gsub("s","",$2); print $2; exit}' <<<"$RUN_OUTPUT")"
 
       echo "${MATRIX_FILE},${N},${NNZ},${NP},${DIMENSION},${MODE},${AVG_TIME_S},${P90_TIME_S},${BASELINE_S},${WEAK_SPEEDUP},${WEAK_EFF}" >>"$SUMMARY_CSV"
 
