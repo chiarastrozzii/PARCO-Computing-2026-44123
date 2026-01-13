@@ -138,14 +138,21 @@ int main(int argc, char* argv[]){
             nnz_rank = calloc(size, sizeof(int));
 
             for (size_t i = 0; i < n_nz; ++i) {
-                int owner_pr = row_indices[i] * p / n_rows;
-                int owner_pc = col_indices[i] * q / n_cols;
+                int pr = owner_block(row_indices[i], n_rows, p);
+                int pc = owner_block(col_indices[i], n_cols, q);
 
-                int coords[2] = {owner_pr, owner_pc};
+                int coords[2] = {pr, pc};
                 int owner;
                 MPI_Cart_rank(grid_comm, coords, &owner);
                 nnz_rank[owner]++;
             } 
+
+            int sum = 0;
+            for (int r = 0; r < size; r++) sum += nnz_rank[r];
+            if (sum != n_nz) {
+                fprintf(stderr, "nnz_rank sum mismatch: sum=%d n_nz=%d\n", sum, n_nz);
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
 
         }
 
