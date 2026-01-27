@@ -565,13 +565,19 @@ int main(int argc, char* argv[]){
             //JUST TO TEST
             bool ok = true;
             for (int i = 0; i < n_rows; i++) {
-                if (fabs(y_global[i] - y_ref[i]) > 1e-9) {
-                    printf("❌ MISMATCH at row %d: parallel=%.6f  ref=%.6f\n", i, y_global[i], y_ref[i]);
-                    ok=false;
+                double a = y_global[i];
+                double b = y_ref[i];
+                double diff = fabs(a - b);
+                double tol  = 1e-9 * fabs(b) + 1e-12;
+            
+                if (diff > tol) {
+                    printf("❌ MISMATCH row %d: par=%.17g ref=%.17g diff=%.3e tol=%.3e\n",
+                           i, a, b, a-b, tol);
+                    ok = false;
                     break;
                 }
             }
-            if (ok) printf("serial check passed!");
+            if (ok) printf("serial check passed!\n");
 
             free(y_ref);
             free(y_global);
@@ -588,15 +594,20 @@ int main(int argc, char* argv[]){
             //JUST TO TEST
             bool ok = true;
             for (int i = 0; i < n_rows; i++) {
-                if (fabs(y_global[i] - y_ref[i]) > 1e-9) {
-                    printf("❌ MISMATCH at row %d: parallel=%.6f  ref=%.6f\n", i, y_global[i], y_ref[i]);
+                double a = y_global[i];
+                double b = y_ref[i];
+                double diff = fabs(a - b);
+                double tol  = 1e-9 * fabs(b) + 1e-12;
+            
+                if (diff > tol) {
+                    printf("❌ MISMATCH row %d: par=%.17g ref=%.17g diff=%.3e tol=%.3e\n",
+                           i, a, b, a-b, tol);
                     ok = false;
                     break;
                 }
             }
-
-            if (ok) printf("serial check passed");
-
+            if (ok) printf("serial check passed!\n");
+            
             free(y_ref);
             free(y_global);
         }

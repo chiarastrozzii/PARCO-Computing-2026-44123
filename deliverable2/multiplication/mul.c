@@ -247,20 +247,26 @@ double *gather_res_1D(double *local_result, int local_n_rows, int local_nnz, int
 
     //gather counts from all ranks
     int *receiver_counts = NULL;
+    int *displs = NULL;
     if (rank == 0){
         receiver_counts = malloc(size * sizeof(int));
+        displs = malloc(size * sizeof(int));
     }
 
     MPI_Gather(&local_n_rows
         , 1, MPI_INT, receiver_counts, 1, MPI_INT, 0, MPI_COMM_WORLD); //many -> one (receiver_counts)
 
     //compute displacements for Gatherv
-    int *displs = NULL;
     if (rank == 0){
-        displs = malloc(size * sizeof(int));
         displs[0] = 0;
+        int total = receiver_counts[0];
         for (int i = 1; i < size; i++) {
             displs[i] = displs[i - 1] + receiver_counts[i - 1];
+            total += receiver_counts[i];
+        }
+
+        if (total != n_rows){
+            fprintf(stderr, "Gatherv total rows mismatich: total=%d n_rows=%d\n", total, n_rows);
         }
     }
 
@@ -277,7 +283,6 @@ double *gather_res_1D(double *local_result, int local_n_rows, int local_nnz, int
     double *y_global = NULL;
     if (rank == 0){
         y_global = calloc(n_rows, sizeof(double)); //rank 0 reconstructs the global result vector
-
         for (int r = 0; r < size; r++) {
             for (int i = 0; i < receiver_counts[r]; i++) {
                 int global_row = r + i * size;

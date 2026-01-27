@@ -2,11 +2,10 @@
 set -euo pipefail
 
 MATRICES=(
-  "494_bus.mtx"
-  "1138_bus.mtx"
-  "bcspwr06.mtx"
-  "bcspwr08.mtx"
-  "bcspwr10.mtx"
+  "af_2_k101.mtx"
+  "af_shell10.mtx"
+  "bone010.mtx"
+  "dielFilterV2real.mtx"
 )
 
 DIMENSIONS=("1D" "2D")
