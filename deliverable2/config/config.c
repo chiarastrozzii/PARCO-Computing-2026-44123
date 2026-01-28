@@ -132,13 +132,11 @@ void read_matrix_market_file(
 
     char line[256];
 
-    // --- Read header line ---
     if (!fgets(line, sizeof(line), f)) {
         fprintf(stderr, "Unexpected end of file (missing header)\n");
         exit(EXIT_FAILURE);
     }
 
-    // Minimal detection: pattern vs real (we assume coordinate + symmetric)
     int is_pattern = (strstr(line, "pattern") != NULL);
     int is_real    = (strstr(line, "real")    != NULL);
 
@@ -147,7 +145,6 @@ void read_matrix_market_file(
         exit(EXIT_FAILURE);
     }
 
-    // --- Skip comments until size line ---
     do{
         if(!fgets(line, sizeof(line), f)) {
             fprintf(stderr, "Unexpected end of file (missing size line)\n");
@@ -161,7 +158,6 @@ void read_matrix_market_file(
         exit(EXIT_FAILURE);
     }
 
-    // --- Read base COO and count off-diagonal entries ---
     int *r_tmp = (int*)malloc((size_t)base_nz * sizeof(int));
     int *c_tmp = (int*)malloc((size_t)base_nz * sizeof(int));
     double *v_tmp = (double*)malloc((size_t)base_nz * sizeof(double));
@@ -189,9 +185,8 @@ void read_matrix_market_file(
             }
         }
 
-        r--; c--; // to 0-based
+        r--; c--; //to 0-based
 
-        // Safety (prevents silent memory corruption later)
         if (r < 0 || r >= *n_rows || c < 0 || c >= *n_cols) {
             fprintf(stderr, "Index out of range in %s: (%d,%d)\n", filename, r, c);
             exit(EXIT_FAILURE);
@@ -204,7 +199,7 @@ void read_matrix_market_file(
         if (r != c) offdiag++;
     }
 
-    // --- Expand symmetric entries ---
+    //expand symmetric entries
     int expanded_nz = base_nz + offdiag;
 
     *row_indices = (int*)malloc((size_t)expanded_nz * sizeof(int));

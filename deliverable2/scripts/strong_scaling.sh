@@ -68,7 +68,7 @@ for DIMENSION in "${DIMENSIONS[@]}"; do
 
         echo "---- MATRIX: $MATRIX ----" | tee -a "$OUT_FILE"
 
-        RUN_OUTPUT="$(mpirun -np "$NP" ./spmv "../../matrix_mkt/$MATRIX" "$DIMENSION" "$MODE" 2>&1 | tee -a "$OUT_FILE")"
+        RUN_OUTPUT="$(mpirun -np "$NP" ./spmv "../strong_scaling_mtx/$MATRIX" "$DIMENSION" "$MODE" 2>&1 | tee -a "$OUT_FILE")"
         echo | tee -a "$OUT_FILE"
 
         #to compute efficiency vs speedup
